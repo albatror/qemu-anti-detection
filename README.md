@@ -143,3 +143,50 @@ Insert YOUR virtual machine's uuid.
 </domain>
 ```
 ![Screenshot_20220819_230305](https://user-images.githubusercontent.com/63996691/185649897-b7609626-ee6d-42b1-bc5e-4465cb41a19a.png)
+
+## Troubleshooting virt-manager/libvirt Integration
+
+If you've compiled and installed a patched QEMU in \`/usr/local/bin\` (as per the instructions in this README) and are facing issues with \`virt-manager\` or \`libvirtd\` not recognizing it or failing to start VMs on distributions like Ubuntu, here are common causes and troubleshooting steps:
+
+**1. Libvirt Not Finding the Custom QEMU Binaries:**
+
+*   **PATH for \`libvirtd\` Service:** The \`libvirtd\` daemon might not have \`/usr/local/bin\` in its PATH. Services often run with a minimal, default PATH.
+    *   **Check \`libvirtd\` PATH:** The method varies by system. For systemd, you can try:
+        \`\`\`bash
+        sudo systemctl show service libvirtd -p Environment --value
+        \`\`\`
+        Look for the PATH variable. If \`/usr/local/bin\` is missing, this is a likely cause.
+    *   **QEMU Binary Configuration:** Libvirt can be configured to look for specific QEMU binaries. Check \`/etc/libvirt/qemu.conf\`. Look for lines like \`qemu_binary = "/usr/bin/qemu-system-x86_64"\` or \`emulator = ["/usr/bin/qemu-system-x86_64"]\` (the exact syntax may vary by version). If these point to the system QEMU, \`libvirtd\` won't use your custom build unless you change this.
+        *   **To Check:** \`grep -E 'qemu_binary|emulator' /etc/libvirt/qemu.conf\`
+        *   **Possible Solution:** If such a line exists and you want \`libvirtd\` to use your custom QEMU by default, you *could* change it to \`/usr/local/bin/qemu-system-x86_64\`. **However, ensure you understand the implications, and back up the configuration file first.** Restart \`libvirtd\` after changes: \`sudo systemctl restart libvirtd\`.
+
+**2. Permissions and Security Modules (AppArmor/SELinux):**
+
+*   Even if \`libvirtd\` *could* find the binary, security policies might prevent its execution.
+    *   **User Permissions:** The QEMU process is often run as the \`libvirt-qemu\` user (or similar). Ensure this user can execute binaries from \`/usr/local/bin\`.
+        *   **Test Execution (conceptual):**
+            \`\`\`bash
+            # First, find the QEMU binary libvirt is trying to use (see logs or qemu.conf)
+            # Then, as root, try to run it as the libvirt-qemu user:
+            sudo -u libvirt-qemu /usr/local/bin/qemu-system-x86_64 --version
+            \`\`\`
+            If this fails, it's a permission or security module issue.
+    *   **AppArmor:** On systems like Ubuntu, AppArmor profiles can restrict what \`libvirtd\` can access.
+        *   **Check Logs:** Look for AppArmor DENIAL messages in system logs: \`sudo journalctl | grep -i DENIED\` or check \`/var/log/audit/audit.log\` / \`/var/log/syslog\`.
+        *   **Solution:** You may need to adjust the AppArmor profile for \`libvirtd\` (often found in \`/etc/apparmor.d/\`) to allow execution of and access to files in \`/usr/local/bin/\` or your specific QEMU path. Reload AppArmor profiles after changes.
+    *   **SELinux:** On systems like Fedora/RHEL, SELinux might be the cause.
+        *   **Check Logs:** Look for AVC denials: \`sudo ausearch -m avc -ts recent\`
+        *   **Solution:** You may need to adjust SELinux policies (e.g., using \`chcon\` for temporary changes or writing custom policy modules for permanent ones) to allow \`libvirtd_t\` (or similar context) to execute your custom QEMU.
+
+**3. Libvirt Logs:**
+
+*   Libvirt logs are crucial for diagnosing issues.
+    *   **QEMU Domain Logs:** Check logs in \`/var/log/libvirt/qemu/\` for the specific VM that fails to start.
+    *   **Libvirtd Service Logs:** Use \`journalctl -u libvirtd\` to see general errors from the libvirt daemon. Look for messages about not being able to find or execute QEMU.
+
+**Important Considerations:**
+
+*   **Avoid Overwriting System Binaries:** As the user who opened the original issue suggested installing to \`/usr/bin\`, **DO NOT directly replace or overwrite QEMU binaries in \`/usr/bin\` with your custom versions.** This can break your system's package management, lead to instability, and make updates difficult. The installation to \`/usr/local/bin\` is correct; the integration with \`libvirt\` is the part that needs configuration.
+*   **Keep Official QEMU Installed:** The main README already advises this for runtime dependencies. This is good practice. Your custom QEMU in \`/usr/local/bin\` should take precedence if the PATH is correctly handled by \`libvirt\`, or if \`libvirt\` is configured to point to it.
+
+By systematically checking these areas, you should be able to identify why \`virt-manager\` is not working as expected with your custom QEMU build.
